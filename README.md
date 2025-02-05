@@ -24,9 +24,8 @@ run serial_bridge.py
 
 open new terminal:
 
-run the node (as a default it will capture yellow object )
-
-it should open camera and send angles (try to move left and right)
+run the node (as a default it will capture yellow object).
+ It should open camera and send angles (try to move left and right)
 
 
 in case if you want to change target_color run:
