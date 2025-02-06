@@ -28,7 +28,7 @@ _open new terminal:_
  It should open camera and send angles (try to move left and right)
 
 
-in case if you want to change target_color run:
+in case if you want to change _target_color_ run:
 
 > ros2 param set /color_detection target_color <name>
 
