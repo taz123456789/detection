@@ -1,9 +1,11 @@
-﻿#define M_PI 3.14159265358979323846
+﻿
+#define M_PI 3.14159265358979323846
+
 #include <rclcpp/rclcpp.hpp>
 #include <opencv2/opencv.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <visualization_msgs/msg/marker.hpp>
-#include <std_msgs/msg/float32.hpp>  // Include Float32 message
+#include <std_msgs/msg/float32.hpp>  // Float32 message
 #include <vector>
 #include <algorithm>
 using namespace std;
@@ -26,7 +28,7 @@ public:
 
         cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
         marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/detected_object", 10);
-        target_angle_pub_ = this->create_publisher<std_msgs::msg::Float32>("/target_angle", 10); // Add publisher
+        target_angle_pub_ = this->create_publisher<std_msgs::msg::Float32>("/target_angle", 10); // Publisher
 
         RCLCPP_INFO(this->get_logger(), "Node started.");
     }
@@ -35,7 +37,7 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr target_angle_pub_;  // Declare publisher for angle
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr target_angle_pub_;  // Declaring publisher for angle
     VideoCapture camera_;
     const double CAMERA_FOV_DEG = 60.0;
     const double REAL_HEIGHT = 6.0;
@@ -138,7 +140,7 @@ private:
             control_robot(best_angle, best_distance);
             visualize_in_rviz(best_angle);
 
-            // Publish the best angle
+            // Publish best angle
             std_msgs::msg::Float32 angle_msg;
             angle_msg.data = best_angle;
             target_angle_pub_->publish(angle_msg); // Publish target angle
