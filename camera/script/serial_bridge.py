@@ -17,7 +17,7 @@ class ESP32AngleControl(Node):
             self.listener_callback,
             10)
         
-        self.serial_port = serial.Serial('COM11', 115200, timeout=1)
+        self.serial_port = serial.Serial('COM4', 115200, timeout=1)
 
     # def listener_callback(self, msg):
     #     angle = msg.data  # Target angle 
