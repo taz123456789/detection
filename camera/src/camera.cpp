@@ -1,57 +1,65 @@
-﻿
+﻿#define M_PI 3.14159265358979323846
 #include <rclcpp/rclcpp.hpp>
 #include <opencv2/opencv.hpp>
-#include <std_msgs/msg/float32.hpp> 
+#include <geometry_msgs/msg/twist.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <std_msgs/msg/float32.hpp>  // Include Float32 message
+#include <vector>
+#include <algorithm>
 using namespace std;
 using namespace cv;
+
 class ColorDetectionNode : public rclcpp::Node {
 public:
-    ColorDetectionNode() : Node("color_detection") {
-        this->declare_parameter<std::string>("target_color", "yellow"); // yellow as a default
-        timer_ = this->create_wall_timer( chrono::milliseconds(30),
+    ColorDetectionNode() : Node("color_detection_node"), camera_(0, CAP_DSHOW) {
+        this->declare_parameter<string>("target_color", "yellow");
+
+        if (!camera_.isOpened()) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to open camera.");
+            return;
+        }
+
+        timer_ = this->create_wall_timer(
+            chrono::milliseconds(30),
             bind(&ColorDetectionNode::process_frame, this)
         );
-        angle_publisher_ = this->create_publisher<std_msgs::msg::Float32>("target_angle", 10);//publisher
-        RCLCPP_INFO(this->get_logger(), "color detection started");
+
+        cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+        marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/detected_object", 10);
+        target_angle_pub_ = this->create_publisher<std_msgs::msg::Float32>("/target_angle", 10); // Add publisher
+
+        RCLCPP_INFO(this->get_logger(), "Node started.");
     }
 
 private:
     rclcpp::TimerBase::SharedPtr timer_;
-    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr angle_publisher_;  // publisher for the angle
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr target_angle_pub_;  // Declare publisher for angle
     VideoCapture camera_;
-
-    // Parameters 
     const double CAMERA_FOV_DEG = 60.0;
+    const double REAL_HEIGHT = 6.0;
+    const double MIN_DISTANCE = 20.0;
+    int object_counter;
 
     void process_frame() {
-        if (!camera_.isOpened()) {
-            camera_.open(0);
-            if (!camera_.isOpened()) {
-                RCLCPP_ERROR(this->get_logger(), " camera not opening");
-                return;
-            }
-        }
-
         Mat frame;
         camera_ >> frame;
         if (frame.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "empty frame");
+            RCLCPP_ERROR(this->get_logger(), "Empty frame");
             return;
         }
 
-        // HSV
         Mat hsvFrame;
-        cvtColor(frame, hsvFrame, cv::COLOR_BGR2HSV);
+        cvtColor(frame, hsvFrame, COLOR_BGR2HSV);
 
-        // selected color 
         string target_color;
         this->get_parameter("target_color", target_color);
 
-        // HSV ranges
         Scalar lowerColor, upperColor;
         if (target_color == "yellow") {
-            lowerColor = Scalar(20, 100, 100);
-            upperColor = Scalar(40, 255, 255);
+            lowerColor = Scalar(35, 40, 40);
+            upperColor = Scalar(85, 255, 255);
         }
         else if (target_color == "blue") {
             lowerColor = Scalar(100, 50, 50);
@@ -68,72 +76,111 @@ private:
         else if (target_color == "red") {
             Scalar lowerRed1(0, 50, 50), upperRed1(10, 255, 255);
             Scalar lowerRed2(160, 50, 50), upperRed2(180, 255, 255);
-            Mat redMask1, redMask2;
+            Mat redMask1, redMask2, colorMask;
             inRange(hsvFrame, lowerRed1, upperRed1, redMask1);
             inRange(hsvFrame, lowerRed2, upperRed2, redMask2);
-            addWeighted(redMask1, 1.0, redMask2, 1.0, 0.0, redMask1);
-            detect_color(frame, redMask1, "Red");
+            bitwise_or(redMask1, redMask2, colorMask);
+            detect_color(frame, colorMask, "Red");
             return;
         }
         else {
-            RCLCPP_WARN(this->get_logger(), "invalid color! so its yellow");
+            RCLCPP_WARN(this->get_logger(), "Invalid color! Defaulting to yellow.");
             lowerColor = Scalar(20, 100, 100);
             upperColor = Scalar(40, 255, 255);
         }
 
-        // mask 
         Mat colorMask;
         inRange(hsvFrame, lowerColor, upperColor, colorMask);
         detect_color(frame, colorMask, target_color);
     }
 
     void detect_color(Mat& frame, Mat& mask, const string& color_name) {
-        // contours
         vector<vector<Point>> contours;
-        vector<Vec4i> hierarchy;
-        findContours(mask, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+        findContours(mask, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
-        if (!contours.empty()) {
-            // largest contour
-            double maxArea = 0;
-            vector<Point> largestContour;
-            for (const auto& contour : contours) {
-                double area = contourArea(contour);
-                if (area > maxArea) {
-                    maxArea = area;
-                    largestContour = contour;
-                }
-            }
+        vector<pair<double, Point>> detected_objects;
 
-            if (!largestContour.empty()) {
-                // centroid of the largest detected object
-                Moments M = moments(largestContour);
-                if (M.m00 != 0) {
-                    int cx = static_cast<int>(M.m10 / M.m00);
-                    int cy = static_cast<int>(M.m01 / M.m00);
-                    circle(frame, Point(cx, cy), 5, Scalar(0, 255, 0), -1);
+        for (const auto& contour : contours) {
+            Rect bounds = boundingRect(contour);
+            if (bounds.area() < 100) continue;
 
-                    // angle θ relative to the center of the camera
-                    int frameWidth = frame.cols;
-                    double angle = ((cx - frameWidth / 2.0) / (frameWidth / 2.0)) * (CAMERA_FOV_DEG / 2.0);
+            Moments m = moments(contour);
+            Point center(m.m10 / m.m00, m.m01 / m.m00);
 
-                    // publishign the angle 
-                    auto angle_msg = std_msgs::msg::Float32();
-                    angle_msg.data = static_cast<float>(angle);
-                    angle_publisher_->publish(angle_msg);
+            double distance = estimate_distance(bounds.height, frame.cols);
+            double angle = calculate_angle(center.x, frame.cols);
 
-                    RCLCPP_INFO(this->get_logger(), "%s detected at angle: %.2f degrees", color_name.c_str(), angle);
-                }
-            }
+            detected_objects.emplace_back(distance, center);
+
+            rectangle(frame, bounds, Scalar(0, 255, 0), 2);
+            circle(frame, center, 5, Scalar(0, 255, 0), -1);
+
+            string dist_text = format("%.1f cm", distance);
+            putText(frame, dist_text, Point(bounds.x, bounds.y - 10),
+                FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 255, 0), 2);
         }
 
-        // show frames
-        imshow("Stream", frame);
-        imshow(color_name + " Detection", mask);
+        if (!detected_objects.empty()) {
+            std::sort(detected_objects.begin(), detected_objects.end(),
+                [](const std::pair<double, cv::Point>& a, const std::pair<double, cv::Point>& b) {
+                    if (a.first == b.first) {
+                        return a.second.x < b.second.x;
+                    }
+                    return a.first < b.first;
+                });
 
-        if (waitKey(30) == 'q') {
-            rclcpp::shutdown();
+            Point best_target = detected_objects.front().second;
+            double best_distance = detected_objects.front().first;
+            double best_angle = calculate_angle(best_target.x, frame.cols);
+
+            RCLCPP_INFO(this->get_logger(), "Detected %s object #%d at %.2f cm", color_name.c_str(), object_counter++, best_distance);
+
+            control_robot(best_angle, best_distance);
+            visualize_in_rviz(best_angle);
+
+            // Publish the best angle
+            std_msgs::msg::Float32 angle_msg;
+            angle_msg.data = best_angle;
+            target_angle_pub_->publish(angle_msg); // Publish target angle
         }
+
+        imshow("Detection", frame);
+        if (waitKey(1) == 'q') rclcpp::shutdown();
+    }
+
+    double calculate_angle(int x_center, int frame_width) {
+        return ((x_center - frame_width / 2.0) / (frame_width / 2.0)) * (CAMERA_FOV_DEG / 2.0);
+    }
+
+    double estimate_distance(int pixel_height, int image_width) {
+        double focal_length = (image_width / 2.0) / tan((CAMERA_FOV_DEG * M_PI / 180) / 2);
+        return (focal_length * REAL_HEIGHT) / pixel_height;
+    }
+
+    void control_robot(double angle_deg, double distance_cm) {
+        geometry_msgs::msg::Twist cmd;
+        cmd.angular.z = -0.05 * angle_deg;
+        cmd.linear.x = (distance_cm > MIN_DISTANCE) ? 0.2 : 0.0;
+        cmd_vel_pub_->publish(cmd);
+    }
+
+    void visualize_in_rviz(double angle_deg) {
+        visualization_msgs::msg::Marker marker;
+        marker.header.frame_id = "base_link";
+        marker.header.stamp = now();
+        marker.type = visualization_msgs::msg::Marker::SPHERE;
+        marker.action = visualization_msgs::msg::Marker::ADD;
+
+        const double DIST = 2.0;
+        marker.pose.position.x = DIST * cos(angle_deg * M_PI / 180);
+        marker.pose.position.y = DIST * sin(angle_deg * M_PI / 180);
+        marker.pose.position.z = 0.5;
+
+        marker.scale.x = marker.scale.y = marker.scale.z = 0.3;
+        marker.color.a = 1.0;
+        marker.color.r = 1.0;
+
+        marker_pub_->publish(marker);
     }
 };
 
@@ -143,3 +190,5 @@ int main(int argc, char** argv) {
     rclcpp::shutdown();
     return 0;
 }
+
+
