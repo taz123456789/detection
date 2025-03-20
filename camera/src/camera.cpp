@@ -5,7 +5,7 @@
 #include <opencv2/opencv.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <visualization_msgs/msg/marker.hpp>
-#include <std_msgs/msg/float32.hpp>  // Float32 message
+#include <geometry_msgs/msg/point.hpp>  //for Point message
 #include <vector>
 #include <algorithm>
 using namespace std;
@@ -26,18 +26,13 @@ public:
             bind(&ColorDetectionNode::process_frame, this)
         );
 
-        cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
-        marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>("/detected_object", 10);
-        target_angle_pub_ = this->create_publisher<std_msgs::msg::Float32>("/target_angle", 10); // Publisher
-
+        target_position_pub_ = this->create_publisher<geometry_msgs::msg::Point>("/target_position", 10);
         RCLCPP_INFO(this->get_logger(), "Node started.");
     }
 
 private:
     rclcpp::TimerBase::SharedPtr timer_;
-    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr target_angle_pub_;  // Declaring publisher for angle
+    rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr target_position_pub_;
     VideoCapture camera_;
     const double CAMERA_FOV_DEG = 60.0;
     const double REAL_HEIGHT = 6.0;
@@ -137,13 +132,16 @@ private:
 
             RCLCPP_INFO(this->get_logger(), "Detected %s object #%d at %.2f cm", color_name.c_str(), object_counter++, best_distance);
 
-            control_robot(best_angle, best_distance);
-            visualize_in_rviz(best_angle);
+            // angle and distance in x, y coordinates
+            double x = best_distance * cos(best_angle * M_PI / 180.0);
+            double y = best_distance * sin(best_angle * M_PI / 180.0);
 
-            // Publish best angle
-            std_msgs::msg::Float32 angle_msg;
-            angle_msg.data = best_angle;
-            target_angle_pub_->publish(angle_msg); // Publish target angle
+            // target position
+            geometry_msgs::msg::Point target_position;
+            target_position.x = x;
+            target_position.y = y;
+            target_position.z = 0.0;
+            target_position_pub_->publish(target_position);
         }
 
         imshow("Detection", frame);
@@ -158,32 +156,6 @@ private:
         double focal_length = (image_width / 2.0) / tan((CAMERA_FOV_DEG * M_PI / 180) / 2);
         return (focal_length * REAL_HEIGHT) / pixel_height;
     }
-
-    void control_robot(double angle_deg, double distance_cm) {
-        geometry_msgs::msg::Twist cmd;
-        cmd.angular.z = -0.05 * angle_deg;
-        cmd.linear.x = (distance_cm > MIN_DISTANCE) ? 0.2 : 0.0;
-        cmd_vel_pub_->publish(cmd);
-    }
-
-    void visualize_in_rviz(double angle_deg) {
-        visualization_msgs::msg::Marker marker;
-        marker.header.frame_id = "base_link";
-        marker.header.stamp = now();
-        marker.type = visualization_msgs::msg::Marker::SPHERE;
-        marker.action = visualization_msgs::msg::Marker::ADD;
-
-        const double DIST = 2.0;
-        marker.pose.position.x = DIST * cos(angle_deg * M_PI / 180);
-        marker.pose.position.y = DIST * sin(angle_deg * M_PI / 180);
-        marker.pose.position.z = 0.5;
-
-        marker.scale.x = marker.scale.y = marker.scale.z = 0.3;
-        marker.color.a = 1.0;
-        marker.color.r = 1.0;
-
-        marker_pub_->publish(marker);
-    }
 };
 
 int main(int argc, char** argv) {
@@ -191,6 +163,3 @@ int main(int argc, char** argv) {
     rclcpp::spin(std::make_shared<ColorDetectionNode>());
     rclcpp::shutdown();
     return 0;
-}
-
-
