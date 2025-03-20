@@ -163,3 +163,4 @@ int main(int argc, char** argv) {
     rclcpp::spin(std::make_shared<ColorDetectionNode>());
     rclcpp::shutdown();
     return 0;
+}
